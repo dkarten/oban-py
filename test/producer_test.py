@@ -131,6 +131,57 @@ class TestProducerAcks:
             assert fetched is not None
             assert fetched.state == "completed"
 
+    async def test_producer_stops_when_cancelled_during_ack(self):
+        @worker()
+        class SimpleWorker:
+            async def process(self, job):
+                pass
+
+        class FakeNotifier:
+            async def listen(self, channel, callback, wait):
+                return "abc123"
+
+            async def unlisten(self, token):
+                pass
+
+        class InterruptedAckQuery:
+            def __init__(self, event):
+                self.jobs = [SimpleWorker.new(id=1)]
+                self.event = event
+
+            async def ack_jobs(self, acks):
+                if self.event.is_set():
+                    return []
+                else:
+                    self.event.set()
+                    try:
+                        await asyncio.sleep(30)
+                    except asyncio.CancelledError:
+                        raise RuntimeError("unexpected error")
+
+            async def delete_producer(self, uuid):
+                pass
+
+            async def insert_producer(self, uuid, name, node, queue, meta):
+                pass
+
+            async def fetch_jobs(self, demand, queue, node, uuid):
+                jobs, self.jobs = self.jobs, []
+                return jobs
+
+        ack_event = asyncio.Event()
+        producer = Producer(
+            name="Oban",
+            node="worker",
+            notifier=FakeNotifier(),
+            query=InterruptedAckQuery(ack_event),
+        )
+
+        await producer.start()
+        producer.notify()
+        await asyncio.wait_for(ack_event.wait(), timeout=0.5)
+        await asyncio.wait_for(producer.stop(), timeout=0.5)
+
 
 class TestProducerCancellation:
     async def test_delegates_cancellation_to_dispatcher(self):

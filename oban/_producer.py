@@ -270,6 +270,8 @@ class Producer(Looper):
             except asyncio.CancelledError:
                 break
             except Exception:
+                if asyncio.current_task().cancelling():
+                    break
                 logger.exception("Error in producer for queue %s", self._queue)
 
     async def _debounce(self) -> None:
